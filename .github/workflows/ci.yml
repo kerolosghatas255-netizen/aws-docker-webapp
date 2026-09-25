@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create test environment
+        run: |
+          cat > .env <<'EOF'
+          POSTGRES_DB=portfolio
+          POSTGRES_USER=portfolio_user
+          POSTGRES_PASSWORD=ci_test_password
+          EOF
+
+      - name: Validate Docker Compose
+        run: docker compose config
+
+      - name: Build and start services
+        run: docker compose up -d --build
+
+      - name: Show service status
+        run: docker compose ps
+
+      - name: Wait for application
+        run: |
+          curl --fail \
+            --retry 12 \
+            --retry-delay 5 \
+            --retry-all-errors \
+            http://localhost/health
+
+      - name: Test database health
+        run: curl --fail http://localhost/db-health
+
+      - name: Test persistent application endpoint
+        run: |
+          RESPONSE1=$(curl --fail --silent http://localhost/visits)
+          echo "$RESPONSE1"
+          echo "$RESPONSE1" | grep '"total_visits":1'
+
+          RESPONSE2=$(curl --fail --silent http://localhost/visits)
+          echo "$RESPONSE2"
+          echo "$RESPONSE2" | grep '"total_visits":2'
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs
+
+      - name: Clean up
+        if: always()
+        run: docker compose down -v
