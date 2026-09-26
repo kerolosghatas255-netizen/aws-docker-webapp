@@ -1,636 +1,276 @@
-# \# AWS Docker Web Application
+# AWS Docker Web Application
 
-# 
+A hands-on DevOps project demonstrating containerization, automated testing, secure AWS deployment, CI/CD, and Infrastructure as Code.
 
-# A hands-on DevOps portfolio project demonstrating containerization, automated testing, secure AWS deployment, and Infrastructure as Code.
+## Architecture
 
-# 
+```mermaid
+flowchart LR
+    DEV[Developer] -->|git push| GH[GitHub]
 
-# \## Architecture
+    GH --> TF[Terraform Validation]
+    GH --> TEST[Integration Tests]
 
-# 
+    TF --> DEPLOY[Deploy]
+    TEST --> DEPLOY
 
-# ```mermaid
+    DEPLOY -->|OIDC| IAM[AWS IAM]
+    IAM --> SSM[AWS Systems Manager]
+    SSM --> EC2[AWS EC2]
 
-# flowchart TD
+    USER[Internet] -->|HTTP :80| NGINX[Nginx]
+    NGINX --> APP[Flask + Gunicorn]
+    APP --> DB[(PostgreSQL)]
+    DB --> VOL[(Persistent Volume)]
 
-# &#x20;   Developer\[Developer] -->|git push| GitHub\[GitHub Repository]
+    IAC[Terraform] --> EC2
+    IAC --> SG[Security Group]
+    IAC --> IAMRES[IAM / OIDC / SSM]
+```
 
-# 
+## Tech Stack
 
-# &#x20;   GitHub --> TFV\[Terraform Validation]
+| Area | Technologies |
+|---|---|
+| Cloud | AWS EC2, IAM, Systems Manager |
+| Infrastructure as Code | Terraform |
+| CI/CD | GitHub Actions, GitHub OIDC |
+| Containers | Docker, Docker Compose |
+| Reverse Proxy | Nginx |
+| Application | Flask, Gunicorn |
+| Database | PostgreSQL |
+| OS | Ubuntu Linux |
 
-# &#x20;   GitHub --> Tests\[Docker Integration Tests]
+## Project Overview
 
-# 
+The application runs as a three-service Docker Compose stack:
 
-# &#x20;   TFV --> Deploy\[Deployment Job]
+- **Nginx** — public reverse proxy
+- **Flask + Gunicorn** — application service
+- **PostgreSQL** — persistent database
 
-# &#x20;   Tests --> Deploy
+Only Nginx is exposed publicly.
 
-# 
+The application and database remain inside Docker's internal network.
 
-# &#x20;   Deploy -->|OIDC| IAM\[AWS IAM Role]
+## Health Checks
 
-# &#x20;   IAM --> SSM\[AWS Systems Manager]
+The application provides:
 
-# &#x20;   SSM --> EC2\[AWS EC2 Ubuntu Server]
+- `/health` — application health
+- `/db-health` — PostgreSQL connectivity
+- `/visits` — persistent database read/write test
 
-# 
+Both the application and PostgreSQL containers include health checks.
 
-# &#x20;   Internet\[Internet] -->|HTTP :80| Nginx\[Nginx Reverse Proxy]
+## Persistent Storage
 
-# &#x20;   Nginx --> App\[Flask + Gunicorn]
+PostgreSQL uses a Docker named volume.
 
-# &#x20;   App --> DB\[(PostgreSQL)]
+Persistence was tested by:
 
-# &#x20;   DB --> Volume\[(Persistent Docker Volume)]
+1. Writing data through `/visits`
+2. Stopping and recreating all containers
+3. Starting the stack again
+4. Confirming the stored counter continued instead of resetting
 
-# 
+This verifies that database data survives container recreation.
 
-# &#x20;   Terraform\[Terraform IaC] --> EC2
+## CI/CD Pipeline
 
-# &#x20;   Terraform --> SG\[Security Group]
+Every push to `main` triggers GitHub Actions.
 
-# &#x20;   Terraform --> IAMResources\[IAM / OIDC / SSM Resources]
+### Terraform Validation
 
-# ```
+```bash
+terraform fmt -check
+terraform init -backend=false
+terraform validate
+```
 
-# 
+### Integration Tests
 
-# \## Technology Stack
+The pipeline automatically:
 
-# 
+- validates Docker Compose
+- builds the application
+- starts Nginx, Flask, and PostgreSQL
+- waits for application health
+- checks database connectivity
+- performs database write/read tests
+- cleans up the test environment
+
+### AWS Deployment
 
-# \- AWS EC2
+Deployment runs only after validation and integration tests succeed.
 
-# \- AWS IAM
+```text
+GitHub Actions
+      |
+      v
+GitHub OIDC
+      |
+      v
+Temporary AWS credentials
+      |
+      v
+AWS Systems Manager
+      |
+      v
+EC2
+      |
+      v
+Git update
+      |
+      v
+Docker Compose build
+      |
+      v
+Health verification
+```
 
-# \- AWS Systems Manager
+No permanent AWS access keys are stored in GitHub.
 
-# \- GitHub OIDC
+No EC2 SSH private key is stored in GitHub.
 
-# \- Terraform
+## AWS Security
 
-# \- GitHub Actions
+### Network Access
 
-# \- Docker
+| Port | Access |
+|---|---|
+| 22 / SSH | Trusted administrator IP only |
+| 80 / HTTP | Public |
+| 5000 / Gunicorn | Private Docker network |
+| 5432 / PostgreSQL | Private Docker network |
 
-# \- Docker Compose
+### EC2 Security
 
-# \- Nginx
+The EC2 instance uses:
 
-# \- Gunicorn
+- Ubuntu Server
+- encrypted `gp3` EBS storage
+- IMDSv2
+- IAM instance profile
+- AWS Systems Manager
 
-# \- Flask
+### GitHub Authentication
 
-# \- PostgreSQL
+GitHub Actions authenticates to AWS using OIDC.
 
-# \- Ubuntu Linux
+The AWS IAM trust relationship is restricted to:
 
-# 
+- this repository
+- the `main` branch
 
-# \## Application Architecture
+This avoids storing long-lived AWS credentials in GitHub.
 
-# 
+## Infrastructure as Code
 
-# The application runs as three Docker Compose services:
+Terraform manages:
 
-# 
+- EC2 instance
+- Security Group
+- EC2 IAM role
+- EC2 instance profile
+- SSM managed policy attachment
+- GitHub OIDC provider
+- GitHub deployment IAM role
+- GitHub deployment IAM policy
+- IAM policy attachment
 
-# \- `nginx` — public reverse proxy on port 80
+The infrastructure was originally created manually and then imported into Terraform.
 
-# \- `app` — Flask application running with Gunicorn
+Terraform was brought to zero drift:
 
-# \- `db` — PostgreSQL database
+```text
+No changes. Your infrastructure matches the configuration.
+```
 
-# 
+## Terraform Structure
 
-# Only Nginx is exposed publicly.
+```text
+infra/
+└── terraform/
+    ├── main.tf
+    ├── providers.tf
+    ├── variables.tf
+    ├── outputs.tf
+    └── .terraform.lock.hcl
+```
 
-# 
+Terraform state and local variable files are excluded from Git.
 
-# Gunicorn port `5000` and PostgreSQL port `5432` remain inside the Docker network.
+## Terraform Outputs
 
-# 
+```bash
+terraform output
+```
 
-# \## Health Checks
+Outputs include:
 
-# 
+- EC2 instance ID
+- public IP
+- public DNS
+- Security Group ID
+- EC2 SSM role ARN
+- GitHub deployment role ARN
 
-# The application provides:
+> The EC2 public IP can change after a stop/start cycle. Deployment does not depend on the public IP because GitHub Actions uses the EC2 instance ID through AWS Systems Manager.
 
-# 
+## Run Locally
 
-# \- `/health` — application health
+Create the environment file:
 
-# \- `/db-health` — PostgreSQL connectivity
+```bash
+cp .env.example .env
+```
 
-# \- `/visits` — persistent database write/read test
+Start the stack:
 
-# 
+```bash
+docker compose up -d --build
+```
 
-# Both the application and PostgreSQL services include Docker health checks.
+Check services:
 
-# 
+```bash
+docker compose ps
+```
 
-# \## Persistent Database Storage
+Open:
 
-# 
+- Application: `http://localhost`
+- Health: `http://localhost/health`
+- Database health: `http://localhost/db-health`
+- Persistence test: `http://localhost/visits`
 
-# PostgreSQL uses a Docker named volume.
+## Useful Commands
 
-# 
+```bash
+docker compose logs app
+docker compose logs nginx
+docker compose logs db
+docker compose down
+```
 
-# Persistence was tested by:
+> Do not use `docker compose down -v` unless you intentionally want to delete the PostgreSQL data volume.
 
-# 
+## Project Status
 
-# 1\. Creating records through `/visits`
+- [x] Dockerized application
+- [x] Docker Compose orchestration
+- [x] Nginx reverse proxy
+- [x] PostgreSQL persistent storage
+- [x] Application health checks
+- [x] AWS EC2 deployment
+- [x] Automated integration tests
+- [x] GitHub Actions CI/CD
+- [x] GitHub OIDC authentication
+- [x] AWS Systems Manager deployment
+- [x] Terraform Infrastructure as Code
+- [x] Terraform validation in CI
 
-# 2\. Stopping and recreating the containers
+## Note
 
-# 3\. Accessing `/visits` again
-
-# 4\. Confirming the counter continued instead of resetting
-
-# 
-
-# This verifies that database data survives container recreation.
-
-# 
-
-# \## CI/CD
-
-# 
-
-# Every push to `main` triggers GitHub Actions.
-
-# 
-
-# The pipeline contains three stages:
-
-# 
-
-# \### 1. Terraform Validation
-
-# 
-
-# GitHub Actions runs:
-
-# 
-
-# ```bash
-
-# terraform fmt -check
-
-# terraform init -backend=false
-
-# terraform validate
-
-# ```
-
-# 
-
-# \### 2. Docker Integration Tests
-
-# 
-
-# The pipeline:
-
-# 
-
-# \- validates Docker Compose
-
-# \- builds the containers
-
-# \- starts Nginx, Flask, and PostgreSQL
-
-# \- checks application health
-
-# \- checks database health
-
-# \- performs database write/read tests
-
-# \- cleans up the test environment
-
-# 
-
-# \### 3. AWS Deployment
-
-# 
-
-# Deployment only starts after both validation jobs succeed.
-
-# 
-
-# The deployment flow is:
-
-# 
-
-# ```text
-
-# GitHub Actions
-
-# &#x20;     ↓
-
-# GitHub OIDC
-
-# &#x20;     ↓
-
-# Temporary AWS IAM credentials
-
-# &#x20;     ↓
-
-# AWS Systems Manager
-
-# &#x20;     ↓
-
-# EC2
-
-# &#x20;     ↓
-
-# git fetch / reset
-
-# &#x20;     ↓
-
-# docker compose up -d --build
-
-# &#x20;     ↓
-
-# health verification
-
-# ```
-
-# 
-
-# No permanent AWS access keys are stored in GitHub.
-
-# 
-
-# The EC2 SSH private key is also not stored in GitHub.
-
-# 
-
-# \## AWS Security
-
-# 
-
-# \### Security Group
-
-# 
-
-# Inbound access:
-
-# 
-
-# \- Port `22` — trusted administrator IP only
-
-# \- Port `80` — public HTTP access
-
-# 
-
-# Not exposed publicly:
-
-# 
-
-# \- Gunicorn `5000`
-
-# \- PostgreSQL `5432`
-
-# 
-
-# \### EC2
-
-# 
-
-# The EC2 instance uses:
-
-# 
-
-# \- Ubuntu Server
-
-# \- `t3.micro`
-
-# \- encrypted `gp3` EBS storage
-
-# \- IMDSv2 required
-
-# \- AWS Systems Manager integration
-
-# 
-
-# \### IAM
-
-# 
-
-# The EC2 instance has an IAM role with:
-
-# 
-
-# ```text
-
-# AmazonSSMManagedInstanceCore
-
-# ```
-
-# 
-
-# GitHub Actions uses a separate IAM role through OIDC.
-
-# 
-
-# The deployment role is restricted to the project repository and the `main` branch.
-
-# 
-
-# \## Terraform
-
-# 
-
-# The AWS infrastructure is managed with Terraform.
-
-# 
-
-# Terraform manages:
-
-# 
-
-# \- EC2 instance
-
-# \- Security Group
-
-# \- EC2 IAM role
-
-# \- EC2 instance profile
-
-# \- SSM policy attachment
-
-# \- GitHub OIDC provider
-
-# \- GitHub deployment IAM role
-
-# \- GitHub deployment policy
-
-# \- IAM policy attachment
-
-# 
-
-# The infrastructure was originally created manually and then imported into Terraform.
-
-# 
-
-# After import and configuration, Terraform reached zero drift:
-
-# 
-
-# ```text
-
-# No changes. Your infrastructure matches the configuration.
-
-# ```
-
-# 
-
-# \## Terraform Structure
-
-# 
-
-# ```text
-
-# infra/
-
-# └── terraform/
-
-# &#x20;   ├── main.tf
-
-# &#x20;   ├── providers.tf
-
-# &#x20;   ├── variables.tf
-
-# &#x20;   ├── outputs.tf
-
-# &#x20;   └── .terraform.lock.hcl
-
-# ```
-
-# 
-
-# Terraform state and `.tfvars` files are excluded from Git.
-
-# 
-
-# \## Terraform Outputs
-
-# 
-
-# Run:
-
-# 
-
-# ```bash
-
-# terraform output
-
-# ```
-
-# 
-
-# Outputs include:
-
-# 
-
-# \- EC2 instance ID
-
-# \- current public IP
-
-# \- public DNS
-
-# \- Security Group ID
-
-# \- EC2 SSM role ARN
-
-# \- GitHub deployment role ARN
-
-# 
-
-# The EC2 public IP may change after stopping and starting the instance.
-
-# 
-
-# The CI/CD deployment does not depend on the public IP. It uses the EC2 instance ID through AWS Systems Manager.
-
-# 
-
-# \## Run Locally
-
-# 
-
-# Create the environment file:
-
-# 
-
-# ```bash
-
-# cp .env.example .env
-
-# ```
-
-# 
-
-# Start the stack:
-
-# 
-
-# ```bash
-
-# docker compose up -d --build
-
-# ```
-
-# 
-
-# Check services:
-
-# 
-
-# ```bash
-
-# docker compose ps
-
-# ```
-
-# 
-
-# Application:
-
-# 
-
-# ```text
-
-# http://localhost
-
-# ```
-
-# 
-
-# Application health:
-
-# 
-
-# ```text
-
-# http://localhost/health
-
-# ```
-
-# 
-
-# Database health:
-
-# 
-
-# ```text
-
-# http://localhost/db-health
-
-# ```
-
-# 
-
-# Persistent database test:
-
-# 
-
-# ```text
-
-# http://localhost/visits
-
-# ```
-
-# 
-
-# \## Useful Commands
-
-# 
-
-# View application logs:
-
-# 
-
-# ```bash
-
-# docker compose logs app
-
-# ```
-
-# 
-
-# View Nginx logs:
-
-# 
-
-# ```bash
-
-# docker compose logs nginx
-
-# ```
-
-# 
-
-# View PostgreSQL logs:
-
-# 
-
-# ```bash
-
-# docker compose logs db
-
-# ```
-
-# 
-
-# Stop the stack:
-
-# 
-
-# ```bash
-
-# docker compose down
-
-# ```
-
-# 
-
-# Do not use `docker compose down -v` unless you intentionally want to delete the PostgreSQL data volume.
-
-# 
-
-# \## Project Status
-
-# 
-
-# \- Dockerized application ✅
-
-# \- Nginx reverse proxy ✅
-
-# \- PostgreSQL persistence ✅
-
-# \- Health checks ✅
-
-# \- AWS EC2 deployment ✅
-
-# \- GitHub Actions integration tests ✅
-
-# \- OIDC authentication ✅
-
-# \- AWS SSM deployment ✅
-
-# \- Terraform Infrastructure as Code ✅
-
-# \- Terraform CI validation ✅
-
-# 
-
-# HTTPS is not configured because this portfolio environment uses a temporary EC2 public address rather than a permanent domain.
-
+HTTPS is intentionally not configured because this portfolio environment uses a temporary EC2 public address instead of a permanent domain.
