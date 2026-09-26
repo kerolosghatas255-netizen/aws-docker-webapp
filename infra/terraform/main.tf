@@ -26,6 +26,7 @@ resource "aws_security_group" "web" {
   }
 }
 
+
 resource "aws_iam_role" "ec2_ssm" {
   name                 = "aws-docker-webapp-ssm-role"
   description          = "Allows EC2 instances to call AWS services on your behalf."
@@ -49,15 +50,18 @@ resource "aws_iam_role" "ec2_ssm" {
   })
 }
 
+
 resource "aws_iam_role_policy_attachment" "ssm_core" {
   role       = aws_iam_role.ec2_ssm.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+
 resource "aws_iam_instance_profile" "ec2_ssm" {
   name = "aws-docker-webapp-ssm-role"
   role = aws_iam_role.ec2_ssm.name
 }
+
 
 resource "aws_instance" "web" {
   ami           = "ami-05bfa4a7765f38076"
@@ -102,4 +106,101 @@ resource "aws_instance" "web" {
   lifecycle {
     prevent_destroy = true
   }
+}
+
+
+# -------------------------------------------------------------------
+# GitHub Actions OIDC
+# -------------------------------------------------------------------
+
+resource "aws_iam_openid_connect_provider" "github" {
+  url = "https://token.actions.githubusercontent.com"
+
+  client_id_list = [
+    "sts.amazonaws.com"
+  ]
+}
+
+
+# -------------------------------------------------------------------
+# GitHub Actions deployment policy
+# -------------------------------------------------------------------
+
+resource "aws_iam_policy" "github_deploy" {
+  name = "github-actions-aws-docker-webapp-deploy"
+  path = "/"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Sid    = "SendDeployCommand"
+        Effect = "Allow"
+
+        Action = [
+          "ssm:SendCommand"
+        ]
+
+        Resource = [
+          "arn:aws:ssm:eu-north-1::document/AWS-RunShellScript",
+          "arn:aws:ec2:eu-north-1:563807597162:instance/i-0a0237040d26ffde4"
+        ]
+      },
+
+      {
+        Sid    = "ReadDeployResult"
+        Effect = "Allow"
+
+        Action = [
+          "ssm:GetCommandInvocation",
+          "ssm:ListCommandInvocations"
+        ]
+
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+
+# -------------------------------------------------------------------
+# GitHub Actions deployment role
+# -------------------------------------------------------------------
+
+resource "aws_iam_role" "github_deploy" {
+  name                 = "github-actions-aws-docker-webapp-role"
+  description          = "OIDC role for GitHub Actions deployment to aws-docker-webapp EC2 via AWS Systems Manager"
+  path                 = "/"
+  max_session_duration = 3600
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Effect = "Allow"
+
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.github.arn
+        }
+
+        Action = "sts:AssumeRoleWithWebIdentity"
+
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+
+            "token.actions.githubusercontent.com:sub" = "repo:kerolosghatas255-netizen@249829443/aws-docker-webapp@1387520567:ref:refs/heads/main"
+          }
+        }
+      }
+    ]
+  })
+}
+
+
+resource "aws_iam_role_policy_attachment" "github_deploy" {
+  role       = aws_iam_role.github_deploy.name
+  policy_arn = aws_iam_policy.github_deploy.arn
 }
