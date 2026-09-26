@@ -246,13 +246,13 @@ HOME_PAGE = """
 
             <div class="flow">
                 <div class="flow-item">Internet</div>
-                <div class="arrow">?</div>
+                <div class="arrow">&rarr;</div>
                 <div class="flow-item">Nginx</div>
-                <div class="arrow">?</div>
+                <div class="arrow">&rarr;</div>
                 <div class="flow-item">Gunicorn</div>
-                <div class="arrow">?</div>
+                <div class="arrow">&rarr;</div>
                 <div class="flow-item">Flask</div>
-                <div class="arrow">?</div>
+                <div class="arrow">&rarr;</div>
                 <div class="flow-item">PostgreSQL</div>
             </div>
         </section>
