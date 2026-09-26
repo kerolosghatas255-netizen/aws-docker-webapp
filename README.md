@@ -1,8 +1,24 @@
 # AWS Docker Web Application
 
-A hands-on DevOps project demonstrating containerization, automated testing, secure AWS deployment, CI/CD, and Infrastructure as Code.
+I built this project to practice a complete DevOps workflow, starting from a local Docker environment and ending with an automated deployment to AWS.
 
-## Architecture
+The application runs as a Docker Compose stack with Nginx, Flask/Gunicorn, and PostgreSQL. GitHub Actions handles validation, integration testing, and deployment. AWS OIDC is used instead of long-lived credentials, AWS Systems Manager handles remote deployment, and Terraform manages the AWS infrastructure.
+
+## Application Architecture
+
+```mermaid
+flowchart LR
+    USER[Internet] -->|HTTP :80| NGINX[Nginx]
+    NGINX --> APP[Flask + Gunicorn]
+    APP --> DB[(PostgreSQL)]
+    DB --> VOL[(Persistent Docker Volume)]
+```
+
+Only Nginx is exposed publicly.
+
+The application container and PostgreSQL stay inside Docker's internal network.
+
+## CI/CD Architecture
 
 ```mermaid
 flowchart LR
@@ -17,16 +33,46 @@ flowchart LR
     DEPLOY -->|OIDC| IAM[AWS IAM]
     IAM --> SSM[AWS Systems Manager]
     SSM --> EC2[AWS EC2]
-
-    USER[Internet] -->|HTTP :80| NGINX[Nginx]
-    NGINX --> APP[Flask + Gunicorn]
-    APP --> DB[(PostgreSQL)]
-    DB --> VOL[(Persistent Volume)]
-
-    IAC[Terraform] --> EC2
-    IAC --> SG[Security Group]
-    IAC --> IAMRES[IAM / OIDC / SSM]
 ```
+
+A deployment only runs after both the Terraform validation and application integration tests succeed.
+
+## What I Worked On
+
+During this project I:
+
+- containerized the Flask application with Docker
+- used Gunicorn instead of the Flask development server
+- configured Nginx as a reverse proxy
+- created a multi-service Docker Compose environment
+- added PostgreSQL with persistent storage
+- added application and database health checks
+- deployed the stack to AWS EC2
+- configured AWS Systems Manager for remote deployments
+- configured GitHub Actions for automated testing and deployment
+- used GitHub OIDC to authenticate to AWS without permanent access keys
+- imported manually created AWS infrastructure into Terraform
+- brought the Terraform configuration to zero infrastructure drift
+- added Terraform validation to the CI pipeline
+
+## Problems I Solved
+
+A big part of this project was troubleshooting the environment while building it.
+
+Some of the issues I worked through included:
+
+- fixing container startup failures caused by a missing Gunicorn dependency
+- troubleshooting Docker Desktop and WSL integration on Windows
+- configuring Docker health checks for the application and database
+- verifying PostgreSQL persistence after container recreation
+- securing PostgreSQL so port `5432` is not exposed publicly
+- configuring AWS IAM permissions for Systems Manager
+- configuring GitHub OIDC trust between GitHub Actions and AWS
+- fixing deployment permissions and EC2 instance targeting in the CI/CD pipeline
+- importing existing AWS resources into Terraform without recreating the EC2 instance
+- handling EC2 public IP changes after stop/start without breaking deployment
+
+The deployment pipeline uses the EC2 instance ID and AWS Systems Manager, so it does not depend on the instance's changing public IP.
 
 ## Tech Stack
 
@@ -41,40 +87,53 @@ flowchart LR
 | Database | PostgreSQL |
 | OS | Ubuntu Linux |
 
-## Project Overview
+## Docker Services
 
-The application runs as a three-service Docker Compose stack:
+The application runs as three Docker Compose services.
 
-- **Nginx** — public reverse proxy
-- **Flask + Gunicorn** — application service
-- **PostgreSQL** — persistent database
+### `nginx`
 
-Only Nginx is exposed publicly.
+Public entry point for the application.
 
-The application and database remain inside Docker's internal network.
+It listens on port `80` and forwards traffic to Gunicorn through Docker's internal network.
+
+### `app`
+
+Flask application served by Gunicorn on port `5000`.
+
+Port `5000` is not published to the Internet.
+
+### `db`
+
+PostgreSQL database on port `5432`.
+
+The database port is not exposed publicly.
+
+A named Docker volume stores the PostgreSQL data.
 
 ## Health Checks
 
-The application provides:
+The project includes the following endpoints:
 
-- `/health` — application health
-- `/db-health` — PostgreSQL connectivity
-- `/visits` — persistent database read/write test
+| Endpoint | Purpose |
+|---|---|
+| `/health` | Application health |
+| `/db-health` | PostgreSQL connectivity |
+| `/visits` | Database read/write and persistence test |
 
-Both the application and PostgreSQL containers include health checks.
+Both the application and PostgreSQL containers also use Docker health checks.
 
-## Persistent Storage
+## PostgreSQL Persistence
 
-PostgreSQL uses a Docker named volume.
+I verified persistence by:
 
-Persistence was tested by:
+1. writing records through `/visits`
+2. stopping and recreating the containers
+3. starting the stack again
+4. accessing `/visits` again
+5. confirming that the counter continued instead of resetting
 
-1. Writing data through `/visits`
-2. Stopping and recreating all containers
-3. Starting the stack again
-4. Confirming the stored counter continued instead of resetting
-
-This verifies that database data survives container recreation.
+This confirmed that the PostgreSQL data remained available after container recreation.
 
 ## CI/CD Pipeline
 
@@ -82,27 +141,30 @@ Every push to `main` triggers GitHub Actions.
 
 ### Terraform Validation
 
+The infrastructure code is checked before deployment:
+
 ```bash
 terraform fmt -check
 terraform init -backend=false
 terraform validate
 ```
 
-### Integration Tests
+### Integration Testing
 
-The pipeline automatically:
+GitHub Actions then:
 
-- validates Docker Compose
-- builds the application
-- starts Nginx, Flask, and PostgreSQL
-- waits for application health
-- checks database connectivity
-- performs database write/read tests
-- cleans up the test environment
+1. creates a temporary environment
+2. validates the Docker Compose configuration
+3. builds all containers
+4. starts Nginx, Flask/Gunicorn, and PostgreSQL
+5. waits for the application to become healthy
+6. checks PostgreSQL connectivity
+7. performs database write/read tests
+8. cleans up the test environment
 
-### AWS Deployment
+### Deployment
 
-Deployment runs only after validation and integration tests succeed.
+If both jobs succeed, GitHub Actions deploys the new version to AWS.
 
 ```text
 GitHub Actions
@@ -120,18 +182,18 @@ AWS Systems Manager
 EC2
       |
       v
-Git update
+git fetch / reset
       |
       v
-Docker Compose build
+docker compose up -d --build
       |
       v
-Health verification
+health verification
 ```
 
-No permanent AWS access keys are stored in GitHub.
+No permanent AWS access key is stored in GitHub.
 
-No EC2 SSH private key is stored in GitHub.
+The EC2 private SSH key is not stored in GitHub either.
 
 ## AWS Security
 
@@ -139,16 +201,17 @@ No EC2 SSH private key is stored in GitHub.
 
 | Port | Access |
 |---|---|
-| 22 / SSH | Trusted administrator IP only |
-| 80 / HTTP | Public |
-| 5000 / Gunicorn | Private Docker network |
-| 5432 / PostgreSQL | Private Docker network |
+| `22` SSH | Trusted administrator IP only |
+| `80` HTTP | Public |
+| `5000` Gunicorn | Internal Docker network |
+| `5432` PostgreSQL | Internal Docker network |
 
-### EC2 Security
+### EC2
 
 The EC2 instance uses:
 
 - Ubuntu Server
+- `t3.micro`
 - encrypted `gp3` EBS storage
 - IMDSv2
 - IAM instance profile
@@ -158,16 +221,15 @@ The EC2 instance uses:
 
 GitHub Actions authenticates to AWS using OIDC.
 
-The AWS IAM trust relationship is restricted to:
+The IAM trust policy is restricted to this repository and the `main` branch.
 
-- this repository
-- the `main` branch
-
-This avoids storing long-lived AWS credentials in GitHub.
+This avoids keeping long-lived AWS credentials in GitHub Secrets.
 
 ## Infrastructure as Code
 
-Terraform manages:
+Terraform manages the AWS resources used by the project.
+
+Managed resources include:
 
 - EC2 instance
 - Security Group
@@ -176,16 +238,18 @@ Terraform manages:
 - SSM managed policy attachment
 - GitHub OIDC provider
 - GitHub deployment IAM role
-- GitHub deployment IAM policy
+- GitHub deployment policy
 - IAM policy attachment
 
-The infrastructure was originally created manually and then imported into Terraform.
+The infrastructure was originally created manually and later imported into Terraform.
 
-Terraform was brought to zero drift:
+After matching the Terraform configuration to the existing environment:
 
 ```text
 No changes. Your infrastructure matches the configuration.
 ```
+
+This allowed the existing environment to move under Terraform management without recreating the EC2 instance.
 
 ## Terraform Structure
 
@@ -199,28 +263,28 @@ infra/
     └── .terraform.lock.hcl
 ```
 
-Terraform state and local variable files are excluded from Git.
+Terraform state and local `.tfvars` files are excluded from Git.
 
 ## Terraform Outputs
+
+Run:
 
 ```bash
 terraform output
 ```
 
-Outputs include:
+The configuration exposes useful values including:
 
 - EC2 instance ID
-- public IP
+- current public IP
 - public DNS
 - Security Group ID
-- EC2 SSM role ARN
-- GitHub deployment role ARN
-
-> The EC2 public IP can change after a stop/start cycle. Deployment does not depend on the public IP because GitHub Actions uses the EC2 instance ID through AWS Systems Manager.
+- EC2 SSM IAM role ARN
+- GitHub deployment IAM role ARN
 
 ## Run Locally
 
-Create the environment file:
+Copy the example environment file:
 
 ```bash
 cp .env.example .env
@@ -232,44 +296,61 @@ Start the stack:
 docker compose up -d --build
 ```
 
-Check services:
+Check the services:
 
 ```bash
 docker compose ps
 ```
 
-Open:
+Then open:
 
 - Application: `http://localhost`
-- Health: `http://localhost/health`
+- Application health: `http://localhost/health`
 - Database health: `http://localhost/db-health`
 - Persistence test: `http://localhost/visits`
 
 ## Useful Commands
 
+Application logs:
+
 ```bash
 docker compose logs app
+```
+
+Nginx logs:
+
+```bash
 docker compose logs nginx
+```
+
+PostgreSQL logs:
+
+```bash
 docker compose logs db
+```
+
+Stop the environment:
+
+```bash
 docker compose down
 ```
 
-> Do not use `docker compose down -v` unless you intentionally want to delete the PostgreSQL data volume.
+> `docker compose down -v` will also delete the PostgreSQL data volume.
 
 ## Project Status
 
 - [x] Dockerized application
-- [x] Docker Compose orchestration
+- [x] Multi-service Docker Compose stack
 - [x] Nginx reverse proxy
 - [x] PostgreSQL persistent storage
-- [x] Application health checks
+- [x] Application and database health checks
 - [x] AWS EC2 deployment
-- [x] Automated integration tests
-- [x] GitHub Actions CI/CD
+- [x] GitHub Actions integration tests
 - [x] GitHub OIDC authentication
 - [x] AWS Systems Manager deployment
 - [x] Terraform Infrastructure as Code
 - [x] Terraform validation in CI
+- [x] Automated CI/CD deployment to AWS
 
 ## Note
 
