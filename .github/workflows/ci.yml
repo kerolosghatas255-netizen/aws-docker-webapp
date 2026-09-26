@@ -9,6 +9,33 @@ on:
       - main
 
 jobs:
+  terraform:
+    name: Terraform Validation
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5.1.0
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.16.4"
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check
+
+      - name: Initialize Terraform
+        run: terraform init -backend=false
+
+      - name: Validate Terraform
+        run: terraform validate
+
+
   test:
     name: Build and Integration Tests
     runs-on: ubuntu-latest
@@ -68,7 +95,10 @@ jobs:
 
   deploy:
     name: Deploy to AWS EC2
-    needs: test
+
+    needs:
+      - terraform
+      - test
 
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
@@ -113,7 +143,6 @@ jobs:
             --output text)
 
           echo "SSM Command ID: $COMMAND_ID"
-          echo "command_id=$COMMAND_ID" >> "$GITHUB_OUTPUT"
 
           for ATTEMPT in {1..60}; do
             STATUS=$(aws ssm get-command-invocation \
@@ -161,4 +190,3 @@ jobs:
 
           echo "Timed out waiting for deployment."
           exit 1
-
