@@ -1,10 +1,10 @@
 resource "aws_security_group" "web" {
-  name        = "aws-docker-webapp-sg"
-  description = "Security group for AWS Docker portfolio project"
-  vpc_id      = "vpc-067e7ebd6216d9464"
+  name                   = "aws-docker-webapp-sg"
+  description            = "Security group for AWS Docker portfolio project"
+  vpc_id                 = "vpc-067e7ebd6216d9464"
+  revoke_rules_on_delete = false
 
   ingress {
-    description = "SSH from trusted IP"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
@@ -12,7 +12,6 @@ resource "aws_security_group" "web" {
   }
 
   ingress {
-    description = "Public HTTP"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
@@ -27,6 +26,38 @@ resource "aws_security_group" "web" {
   }
 }
 
+resource "aws_iam_role" "ec2_ssm" {
+  name                 = "aws-docker-webapp-ssm-role"
+  description          = "Allows EC2 instances to call AWS services on your behalf."
+  path                 = "/"
+  max_session_duration = 3600
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Effect = "Allow"
+
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ssm_core" {
+  role       = aws_iam_role.ec2_ssm.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_instance_profile" "ec2_ssm" {
+  name = "aws-docker-webapp-ssm-role"
+  role = aws_iam_role.ec2_ssm.name
+}
 
 resource "aws_instance" "web" {
   ami           = "ami-05bfa4a7765f38076"
@@ -36,7 +67,7 @@ resource "aws_instance" "web" {
   associate_public_ip_address = true
 
   key_name             = "aws-docker-webapp-key"
-  iam_instance_profile = "aws-docker-webapp-ssm-role"
+  iam_instance_profile = aws_iam_instance_profile.ec2_ssm.name
 
   vpc_security_group_ids = [
     aws_security_group.web.id
